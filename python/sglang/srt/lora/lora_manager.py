@@ -16,7 +16,7 @@
 # and "Punica: Multi-Tenant LoRA Serving"
 
 import logging
-from typing import Dict, Set, Tuple
+from typing import Dict, Optional, Set, Tuple
 
 import torch
 
@@ -53,6 +53,7 @@ class LoRAManager:
         lora_backend: str = "triton",
         tp_size: int = 1,
         tp_rank: int = 0,
+        max_lora_rank: Optional[int] = None,
     ):
         self.base_model: torch.nn.Module = base_model
         self.base_hf_config: AutoConfig = base_hf_config
@@ -62,6 +63,10 @@ class LoRAManager:
         self.device: torch.device = next(self.base_model.parameters()).device
         self.tp_size: int = tp_size
         self.tp_rank: int = tp_rank
+
+        # Maximum LoRA rank across all loaded adapters.
+        # The value will be inferred from the loaded adapters if not explicitly provided as args.
+        self.max_lora_rank: Optional[int] = max_lora_rank
 
         # LoRA backend for running sgemm kernels
         logger.info(f"Using {lora_backend} as backend of LoRA kernels.")
@@ -120,11 +125,13 @@ class LoRAManager:
         """
 
         results = []
-        for lora_name, lora_path in lora_paths.items():
-            result = self.load_lora_adapter(lora_name, lora_path, update_state=False)
-            results.append(result)
-
-        self.update_state_from_configs()
+        if lora_paths:
+            for lora_name, lora_path in lora_paths.items():
+                result = self.load_lora_adapter(
+                    lora_name, lora_path, update_state=False
+                )
+                results.append(result)
+            self.update_state_from_configs()
 
         return self.create_lora_update_result(
             success=all(result.success for result in results),
@@ -358,6 +365,7 @@ class LoRAManager:
             self.dtype,
             self.tp_size,
             self.tp_rank,
+            self.max_lora_rank,
         )
 
     def update_state_from_configs(self):
@@ -377,7 +385,9 @@ class LoRAManager:
         hf_target_module_names: Set[str] = set()
         for config in self.configs.values():
             hf_target_module_names.update(config.target_modules)
-        max_lora_dim: int = max([x.hf_config["r"] for x in self.configs.values()])
+
+        # Ensure that the LoRA ranks are valid.
+        self.validate_lora_ranks()
 
         # Loads / unloads LoRA adapters based on the latest configs.
         self.update_lora_adapters()
@@ -391,7 +401,20 @@ class LoRAManager:
         # list of LoRA weight names is expected to be extremely finite and stable.
         self.update_lora_weight_names(hf_target_module_names)
         self.update_lora_modules(hf_target_module_names)
-        self.update_memory_buffers(max_lora_dim)
+        self.update_memory_buffers()
+
+    def validate_lora_ranks(self):
+        # Infer max_lora_rank from initial adapters if not provided.
+        if self.max_lora_rank is None:
+            self.max_lora_rank = max([x.hf_config["r"] for x in self.configs.values()])
+
+        # Ensure that the provided max_lora_rank is not smaller than the rank of any loaded adapter.
+        assert all(
+            x.hf_config["r"] <= self.max_lora_rank for x in self.configs.values()
+        ), (
+            f"The provided/inferred max_lora_rank ({self.max_lora_rank}) is smaller than the rank of some loaded adapters. "
+            "Please ensure that a sufficiently large max_lora_rank is provided in server args."
+        )
 
     def update_lora_weight_names(self, hf_target_names: Set[str]):
         """
@@ -436,11 +459,11 @@ class LoRAManager:
         if self.lora_backend == "flashinfer":
             lora_dims = set(x.hf_config["r"] for x in self.configs.values())
             scalings = set(x.scaling for x in self.loras.values())
-            assert (
-                len(lora_dims) == 1 and len(scalings) == 1
-            ), "Flashinfer backend currently only supports single LoRA rank and scaling across all adapters. "
+            assert len(lora_dims) == 1 and len(scalings) == 1, (
+                "Flashinfer backend currently only supports single LoRA rank and scaling across all adapters. "
+            )
 
-    def update_memory_buffers(self, max_lora_dim: int):
+    def update_memory_buffers(self):
         """
         Update the LoRA memory pool buffers based on the current LoRA configurations and update
         LoRA modules to use the new buffers. This method should be called after the LoRA configurations
@@ -448,7 +471,9 @@ class LoRAManager:
         """
 
         self.memory_pool.init_buffers(
-            self.lora_weight_names, self.base_model, max_lora_dim
+            lora_weight_names=self.lora_weight_names,
+            base_model=self.base_model,
+            max_lora_rank=self.max_lora_rank,
         )
 
     def set_lora_module(self, module_name, module):

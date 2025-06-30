@@ -683,8 +683,8 @@ class TokenizerManager:
         unloaded_adapters = requested_adapters - loaded_adapters
         if unloaded_adapters:
             raise ValueError(
-                f"The following requested LoRA adapters are not loaded: {unloaded_adapters}\n"
-                f"Loaded adapters: {loaded_adapters}."
+                f"The following requested LoRA adapters are not loaded: {list(unloaded_adapters)}\n"
+                f"Loaded adapters: {list(loaded_adapters)}."
             )
 
     def _send_one_request(

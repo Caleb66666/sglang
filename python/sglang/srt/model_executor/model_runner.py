@@ -814,6 +814,7 @@ class ModelRunner:
             lora_backend=self.server_args.lora_backend,
             tp_size=self.tp_size,
             tp_rank=self.tp_rank,
+            max_lora_rank = self.server_args.max_lora_rank,
         )
         result = self.lora_manager.load_lora_adapters(self.server_args.lora_paths)
         if result.success:

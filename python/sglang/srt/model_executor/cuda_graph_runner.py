@@ -510,11 +510,11 @@ class CudaGraphRunner:
                 spec_info.capture_hidden_mode if spec_info else CaptureHiddenMode.NULL
             )
 
-        if self.model_runner.server_args.enable_lora is not None:
+        if self.model_runner.server_args.enable_lora:
             # Currently, if the lora_path in `lora_paths` is None, the lora backend will use a
             # different logic to handle lora, so we need to set `lora_paths` to a list of non-None
             # values if lora is enabled.
-            lora_paths = []
+            lora_paths = [None] * bs
         else:
             lora_paths = None
 
