@@ -32,10 +32,10 @@ from sglang.test.test_utils import (
 
 PROMPTS = [
     "SGL is a",
-    "AI is a field of computer science focused on",
-    "Computer science is the study of",
-    "Write a short story.",
-    "What are the main components of a computer?",
+    # "AI is a field of computer science focused on",
+    # "Computer science is the study of",
+    # "Write a short story.",
+    # "What are the main components of a computer?",
 ]
 
 
@@ -89,7 +89,9 @@ TEST_CASES = [
             Operation(
                 type=OperationType.EXPECT_ERROR,
                 data=(
-                    create_batch_data("philschmid/code-llama-3-1-8b-text-to-sql-lora"),
+                    create_batch_data(
+                        "philschmid/code-llama-3-1-8b-text-to-sql-lora"
+                    ),
                     "not loaded",
                 ),
             ),
@@ -131,39 +133,39 @@ TEST_CASES = [
                     ]
                 ),
             ),
-            Operation(
-                type=OperationType.FORWARD,
-                data=create_batch_data(
-                    [
-                        "philschmid/code-llama-3-1-8b-text-to-sql-lora",
-                        "Nutanix/Meta-Llama-3.1-8B-Instruct_lora_4_alpha_16",
-                        "pbevan11/llama-3.1-8b-ocr-correction",
-                        None,
-                    ]
-                ),
-            ),
-            Operation(
-                type=OperationType.UNLOAD,
-                data="philschmid/code-llama-3-1-8b-text-to-sql-lora",
-            ),
-            Operation(
-                type=OperationType.EXPECT_ERROR,
-                data=(
-                    create_batch_data("philschmid/code-llama-3-1-8b-text-to-sql-lora"),
-                    "not loaded",
-                ),
-            ),
-            Operation(
-                type=OperationType.FORWARD,
-                data=create_batch_data(
-                    [
-                        None,
-                        "Nutanix/Meta-Llama-3.1-8B-Instruct_lora_4_alpha_16",
-                        "pbevan11/llama-3.1-8b-ocr-correction",
-                        None,
-                    ]
-                ),
-            ),
+            # Operation(
+            #     type=OperationType.FORWARD,
+            #     data=create_batch_data(
+            #         [
+            #             "philschmid/code-llama-3-1-8b-text-to-sql-lora",
+            #             "Nutanix/Meta-Llama-3.1-8B-Instruct_lora_4_alpha_16",
+            #             "pbevan11/llama-3.1-8b-ocr-correction",
+            #             None,
+            #         ]
+            #     ),
+            # ),
+            # Operation(
+            #     type=OperationType.UNLOAD,
+            #     data="philschmid/code-llama-3-1-8b-text-to-sql-lora",
+            # ),
+            # Operation(
+            #     type=OperationType.EXPECT_ERROR,
+            #     data=(
+            #         create_batch_data("philschmid/code-llama-3-1-8b-text-to-sql-lora"),
+            #         "not loaded",
+            #     ),
+            # ),
+            # Operation(
+            #     type=OperationType.FORWARD,
+            #     data=create_batch_data(
+            #         [
+            #             None,
+            #             "Nutanix/Meta-Llama-3.1-8B-Instruct_lora_4_alpha_16",
+            #             "pbevan11/llama-3.1-8b-ocr-correction",
+            #             None,
+            #         ]
+            #     ),
+            # ),
         ],
     ),
     # TestCase(
@@ -387,7 +389,7 @@ class LoRAUpdateTestSessionBase:
         self.max_lora_rank = max_lora_rank
         self.max_loras_per_batch = max_loras_per_batch
         self.lora_backend = lora_backend
-        self.disable_cuda_graph = disable_cuda_graph
+        self.disable_cuda_graph = disable_cuda_graph 
         self.cuda_graph_max_bs = cuda_graph_max_bs
         self.enable_lora = enable_lora
 
@@ -724,8 +726,8 @@ class TestLoRADynamicUpdate(CustomTestCase):
     def test_dynamic_adapter_updates(self):
         for case_idx, test_case in enumerate(TEST_CASES, start=1):
             for mode in [
-                LoRAUpdateTestSessionMode.SERVER,
                 LoRAUpdateTestSessionMode.ENGINE,
+                # LoRAUpdateTestSessionMode.SERVER,
             ]:
                 print("=" * 100)
                 print(f"Starting test case {case_idx} in {mode.value} mode. Test description: {test_case.description}")

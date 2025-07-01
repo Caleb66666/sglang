@@ -30,7 +30,6 @@ from sglang.srt.lora.mem_pool import LoRAMemoryPool
 from sglang.srt.lora.utils import (
     LoRABatchInfo,
     LoRAType,
-    get_customized_names_from_hf_names,
     get_layer_id,
     get_normalized_lora_weight_names,
     get_weight_name,
@@ -64,6 +63,9 @@ class LoRAManager:
         self.tp_size: int = tp_size
         self.tp_rank: int = tp_rank
 
+        self.init_lora_modules_info()
+        self.init_memory_pool()
+
         # Maximum LoRA rank across all loaded adapters.
         # The value will be inferred from the loaded adapters if not explicitly provided as args.
         self.max_lora_rank: Optional[int] = max_lora_rank
@@ -75,6 +77,7 @@ class LoRAManager:
 
         # Initialize mutable internal state of the LoRAManager.
         self.init_state()
+
 
     def init_cuda_graph_batch_info(self, max_bs_in_cuda_graph: int):
         self.max_bs_in_cuda_graph = max_bs_in_cuda_graph
@@ -131,7 +134,8 @@ class LoRAManager:
                     lora_name, lora_path, update_state=False
                 )
                 results.append(result)
-            self.update_state_from_configs()
+
+        self.update_state_from_configs()
 
         return self.create_lora_update_result(
             success=all(result.success for result in results),
@@ -346,19 +350,14 @@ class LoRAManager:
 
         # Configs of all active LoRA adapters.
         self.configs: Dict[str, LoRAConfig] = {}
-
+        
         # LoRA adapter weights cached in CPU memory.
         self.loras: Dict[str, LoRAAdapter] = {}
 
-        # Supported weight names (e.g., qkv_proj) for LoRA A and B respectively.
-        self.lora_weight_names: Tuple[Set[str]] = (set(), set())
-
-        # Look-up table that essentially maps (layer_index, module_name) to the corresponding LoRA module.
-        self.lora_modules: Dict[int, Dict[str, BaseLayerWithLoRA]] = {
-            i: {} for i in range(self.base_hf_config.num_hidden_layers)
-        }
-
-        # Initialize memory pool
+    def init_memory_pool(self):
+        """
+        Initialize the GPU memory buffer for storing LoRA weights.
+        """
         self.memory_pool = LoRAMemoryPool(
             self.base_hf_config,
             self.max_loras_per_batch,
@@ -366,6 +365,11 @@ class LoRAManager:
             self.tp_size,
             self.tp_rank,
             self.max_lora_rank,
+        )
+        self.memory_pool.init_buffers(
+            lora_weight_names=self.lora_weight_names,
+            base_model=self.base_model,
+            max_lora_rank=self.max_lora_rank,
         )
 
     def update_state_from_configs(self):
@@ -376,7 +380,6 @@ class LoRAManager:
         This includes:
         - Initializing LoRA adapters if they are not already loaded.
         - Collect all LoRA weight names based on the current loaded adapters.
-        - Lazily monkey-patching the base model to use LoRA layers where applicable.
         - Preparing the GPU buffer pool for active LoRA weights.
         """
 
@@ -392,17 +395,6 @@ class LoRAManager:
         # Loads / unloads LoRA adapters based on the latest configs.
         self.update_lora_adapters()
 
-        # Lazily update states for new LoRA weight name (e.g., qkv_proj) as needed.
-        #
-        # Please note that the following update operations are "monotonic" by design, meaning that we update
-        # multiple places to support the new weight names when the first adapter targeting such weight names
-        # is loaded. However, we never "rollback" the support (e.g., convert LoRA layer back to base layer)
-        # even if the associated adapters are unloaded later for both simplicity and practicality reasons: the
-        # list of LoRA weight names is expected to be extremely finite and stable.
-        self.update_lora_weight_names(hf_target_module_names)
-        self.update_lora_modules(hf_target_module_names)
-        self.update_memory_buffers()
-
     def validate_lora_ranks(self):
         # Infer max_lora_rank from initial adapters if not provided.
         if self.max_lora_rank is None:
@@ -416,16 +408,19 @@ class LoRAManager:
             "Please ensure that a sufficiently large max_lora_rank is provided in server args."
         )
 
-    def update_lora_weight_names(self, hf_target_names: Set[str]):
+    def get_lora_weight_names(self, hf_target_names: Set[str]) -> Tuple[Set[str], Set[str]]:
         """
         Add new LoRA weight names if needed based on the current `self.configs`.
         """
+        # Supported weight names (e.g., qkv_proj) for LoRA A and B respectively.
+        lora_weight_names: Tuple[Set[str]] = (set(), set())
 
-        # Target lora weight names for lora_a and lora_b modules respectively.
         for module in hf_target_names:
             lora_A, lora_B = get_normalized_lora_weight_names(module)
-            self.lora_weight_names[0].update(lora_A)
-            self.lora_weight_names[1].update(lora_B)
+            lora_weight_names[0].update(lora_A)
+            lora_weight_names[1].update(lora_B)
+        
+        return lora_weight_names
 
     def update_lora_adapters(self):
         """
@@ -463,30 +458,18 @@ class LoRAManager:
                 "Flashinfer backend currently only supports single LoRA rank and scaling across all adapters. "
             )
 
-    def update_memory_buffers(self):
-        """
-        Update the LoRA memory pool buffers based on the current LoRA configurations and update
-        LoRA modules to use the new buffers. This method should be called after the LoRA configurations
-        are set or updated.
-        """
-
-        self.memory_pool.init_buffers(
-            lora_weight_names=self.lora_weight_names,
-            base_model=self.base_model,
-            max_lora_rank=self.max_lora_rank,
-        )
-
     def set_lora_module(self, module_name, module):
         lora_module = get_lora_layer(module, self.lora_backend)
         replace_submodule(self.base_model, module_name, lora_module)
         return lora_module
 
-    def update_lora_modules(self, hf_target_names: Set[str]):
-        # Target module names of customized layers defined in python/sglang/srt/layers
-        # e.g., {"qkv_proj", "o_proj"}
-        customized_target_names = get_customized_names_from_hf_names(
-            hf_target_names, self.base_model
-        )
+    def init_lora_modules_info(self):
+        # Supported weight names (e.g., qkv_proj) for LoRA A and B respectively.
+        self.lora_weight_names: Tuple[Set[str]] = (set(), set())
+        # Look-up table that essentially maps (layer_index, module_name) to the corresponding LoRA module.
+        self.lora_modules: Dict[int, Dict[str, BaseLayerWithLoRA]] = {
+            i: {} for i in range(self.base_hf_config.num_hidden_layers)
+        }
 
         for module_name, module in self.base_model.named_modules():
             # TODO (lifuhuang): in the future, we should consider generalizing the
@@ -499,10 +482,14 @@ class LoRAManager:
             ) and not self.base_model.should_apply_lora(module_name):
                 continue
 
-            # The module should be converted if it is included in target_names
-            if module_name.split(".")[-1] in customized_target_names:
-                layer_id = get_layer_id(module_name)
-                if module_name not in self.lora_modules[layer_id]:
-                    self.lora_modules[layer_id][module_name] = self.set_lora_module(
-                        module_name, module
-                    )
+            lora_module = get_lora_layer(module, self.lora_backend)
+            if lora_module is None:
+                continue
+
+            layer_id = get_layer_id(module_name)
+            replace_submodule(self.base_model, module_name, lora_module)
+            self.lora_modules[layer_id][module_name] = lora_module   
+
+            lora_A, lora_B = get_normalized_lora_weight_names(module)
+            self.lora_weight_names[0].update(lora_A)
+            self.lora_weight_names[1].update(lora_B)
