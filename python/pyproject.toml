@@ -42,7 +42,7 @@ runtime_common = [
     "uvicorn",
     "uvloop",
     "compressed-tensors",
-    "xgrammar==0.1.17",
+    "xgrammar==0.1.11",
 ]
 
 srt = [
