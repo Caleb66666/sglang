@@ -41,7 +41,7 @@ runtime_common = [
     "uvicorn",
     "uvloop",
     "compressed-tensors",
-    "xgrammar==0.1.17",
+    "xgrammar==0.1.11"
 ]
 
 srt = [
@@ -53,6 +53,7 @@ srt = [
     "outlines>=0.0.44,<=0.1.11",
     "partial_json_parser",
     "einops",
+    "vllm==0.7.3",
 ]
 
 # HIP (Heterogeneous-computing Interface for Portability) for AMD
@@ -60,7 +61,7 @@ srt = [
 srt_hip = [
     "sglang[runtime_common]",
     "torch",
-    "vllm==0.6.7.dev2",
+    "vllm==0.7.3",
     "outlines==0.1.11"
 ]
 
